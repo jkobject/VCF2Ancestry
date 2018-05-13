@@ -11,6 +11,7 @@
 # along with the labeled and predicted ancestry classifications
 
 import os
+from itertools import chain
 import numpy as np
 from sklearn.decomposition import PCA
 import pandas as pd
@@ -21,7 +22,15 @@ from sklearn.model_selection import cross_val_score
 from sklearn.neighbors.nearest_centroid import NearestCentroid
 from sklearn.ensemble import AdaBoostClassifier
 from sklearn.metrics import accuracy_score
+from sklearn.svm import SVC
 import time
+from joblib import Parallel, delayed
+from matplotlib import pyplot as plt
+try:
+    from urllib2 import urlopen as urlopen
+except ImportError:
+    from urllib.request import urlopen as urlopen
+import pdb
 
 
 class Population(object):
@@ -32,6 +41,9 @@ class Population(object):
              'sas': 'south asian',
              'afr': 'african',
              'amr': 'mixed american'}
+
+    dataset = {'labels_miniproj.txt': 'https://www.dropbox.com/s/dmgchsjklm1jvgk/acb_ii_mini_project_labels.txt?dl=1',
+               'data_miniproj.vcf.bgz': 'https://www.dropbox.com/s/iq8c81awi31067c/acb_ii_mini_project.vcf.bgz?dl=1'}
     maxallelefreq = None
     callrate = None
     outfile = None
@@ -48,16 +60,16 @@ class Population(object):
     rec = None
     classifier = None
     tofind = None
+    found = None
 
-    def __init__(self, arg):
+    def __init__(self):
         super(Population, self).__init__()
-        self.arg = arg
 
     def __getitem__(self, key):
         print self.types[list(self.labeled.loc[self.labeled['sample_id'] == key]['ancestry'])[0]]
 
     def __len__(self):
-        return self.labeled.shape[0], self.tofind.shape[0]
+        return (self.labeled.shape[0], self.tofind.shape[0]) if self.labeled is not None else 0
 
     def __iter__(self, labeled=True):
         return iter(list(self.labeled['sample_id']))
@@ -70,10 +82,28 @@ class Population(object):
 
 # Functions
 
-    def load_dataset(self, filename):
-        pass
+    def load_dataset(self, filename=None, url=None):
+        if filename is None:
+            for key, val in self.dataset.iteritems():
+                if not os.path.exists('data/' + key):
+                    print "downloading " + key + " with urllib"
+                    f = urlopen(val)
+                    data = f.read()
+                    with open('data/' + key, "wb") as code:
+                        code.write(data)
+                else:
+                    print "file is already there"
+        else:
+            if not os.path.exists(filename):
+                print "downloading " + filename + " with urllib"
+                f = urlopen(url)
+                data = f.read()
+                with open(filename, "wb") as code:
+                    code.write(data)
+            else:
+                print "file is already there"
 
-    def filter_variants(self, name="data/mini_project.vcf.bgz", out="out", minmissing=30000, maxr2=0.01, callrate=0.8, maxallelefreq=0.01):
+    def filter_variants(self, name="data/data_miniproj.vcf.bgz", out="out", minmissing=30000, maxr2=0.01, callrate=0.8, maxallelefreq=0.01):
         """
         Successful, clean PCA on human genetic data will require
         filtering data to high-quality variants that are linkage disequilibrium (LD)-pruned.
@@ -84,38 +114,39 @@ class Population(object):
         min missing r2
 
         """
+        print "assuming you have mawk, vcftools, cat, cut installed"
         self.maxallelefreq = maxallelefreq
         self.callrate = callrate
         self.outfile = out
-        filt = "vcftools --vcf '" + name + "' --recode --out lowDPbefore"
-        filt += " --maf " + maxallelefreq
-        filt += ' --min-alleles 2 --max-alleles 2 '
-        filt += ' --max-missing ' + callrate
+        filt = "vcftools --gzvcf '" + name + "' --recode --out data/lowDPbefore"
+        filt += " --maf " + str(maxallelefreq)
+        filt += ' --min-alleles 2 --max-alleles 2'
+        filt += ' --max-missing ' + str(callrate)
         print "applying first filter"
         os.system(filt)
         print "applying first filter"
-        cmd = 'vcftools --vcf "trial1.recode.vcf" --missing-indv'
-        os.system(cmd)
+        os.system('vcftools --vcf "data/lowDPbefore.recode.vcf" --missing-indv --out data/out')
         print "finding if too much missing individuals and recoding the file"
-        os.system("mawk '$4 > 30000' out.imiss | cut - f1 > lowDP.indv")
-        os.system("vcftools --vcf 'lowDPbefore.recode.vcf' --recode --remove lowDP.indv --out filtered2")
+        os.system("mawk '$4 > 30000' data/out.imiss | cut -f1 > data/lowDP.indv")
+        os.system("vcftools --vcf 'data/lowDPbefore.recode.vcf' --recode --remove data/lowDP.indv --out data/filtered2")
         print "removing garbage.."
-        os.system('rm lowDP*')
+        os.system('rm data/lowDP*')
 
         vcf_reader = vcf.Reader(open('data/filtered2.recode.vcf', 'r'))
+        os.system('mkdir data/chunks')
         print "dividing the input file.."
         for i in vcf_reader.contigs.keys():
             i = str(i)
             if len(i) < 3:
-                os.system("vcftools  --vcf  filtered2.recode.vcf  --chr " + i +
-                          " --recode --recode-INFO-all --out  chunks/VCF_ch" + i)
+                os.system("vcftools  --vcf  data/filtered2.recode.vcf  --chr " + i +
+                          " --recode --recode-INFO-all --out  data/chunks/VCF_ch" + i)
         print "running the ld prunning in parallel (might still take time (avg is 60mn)"
         for i in vcf_reader.contigs.keys():
             i = str(i)
             if len(i) < 3:
-                os.system("vcftools --vcf chunks/VCF_" + i +
-                          ".recode.vcf --min-r2 0.1 --geno-r2 --out chunks/VCF_" + i + " &")
-        start = time.timer()
+                os.system("vcftools --vcf data/chunks/VCF_ch" + i +
+                          ".recode.vcf --min-r2 0.1 --geno-r2 --out data/chunks/filtVCF_ch" + i + " &")
+        start = time.time()
         while(True):
             nbjob = 0
             for p in psutil.process_iter():
@@ -129,63 +160,23 @@ class Population(object):
             if nbjob == 0:
                 break
             else:
-                print "there is still" + str(nbjob) + " jobs \r",
-        end = time.timer()
+                print "there is still " + str(nbjob) + " jobs \r",
+        end = time.time()
         print "it took " + str(end - start) + " seconds"
         print "concatenating every file"
-        os.system('rm *.log')
-        os.system('cat VCF_* > all_VCF.geno.lg')
+        os.system('rm data/*.log')
+        os.system('cat data/chunks/filtVCF_ch* > data/all_VCF.geno.lg')
         print "now prunning..."
-        os.system('vcftools --vcf filtered2.recode.vcf --exclude-positions all_VCF.geno.lg --recode --out' + out)
+        os.system('vcftools --vcf data/filtered2.recode.vcf --exclude-positions data/all_VCF.geno.lg --recode --out data/' + out)
 
-    def reducedim(self, inp=None, topred=None, reducer='pca', n_components=500, val='gt'):
-        self.nbcomp = n_components
-        self.valofinterest = val
-        if inp is None:
-            inp = self.train_gt if val is 'gt' else self.train_pha
-        if topred is None:
-            topred = self.test_gt if val is 'gt' else self.test_pha
-        toreduce = np.vstack(inp, topred)
-        if reducer is 'pca':
-            redu = PCA(n_components=n_components)
-        red = redu.fit_transform(toreduce)
-        self.train_red = red[:inp.shape[0]]
-        self.pred_red = red[inp.shape[0]:]
-
-    def train_classifier(self, inp=None, classifier='knn', test='CV', scoring='accuracy', percentage=0.3):
-        if inp is None:
-            inp = self.train_red
-        self.classifier = classifier
-        if classifier is 'adaboost':
-            self.clf = AdaBoostClassifier(n_estimators=self.nbcomp * 0.7)
-        if classifier is 'knn':
-            self.clf = NearestCentroid()
-        if test is 'CV':
-            scores = cross_val_score(self.clf, inp, self.labeled['ancestry'], scoring=scoring, cv=3, n_jobs=1)
-            print "cv scores : " + scores
-            score = np.mean(scores)
-        if test is 'reg':
-            X_train, X_test, y_train, y_test = self.get_training_data(inp, percentage=0.3)
-            self.clf.fit(X_train, y_train)
-            y_pred = self.clf.predict(X_test)
-            score = accuracy_score(y_test, y_pred)
-        print "the total score is of " + score
-
-    def predict_labels(self, inp):
-        if self.clf is not None:
-            return self.clf.predict(inp) if inp is not None else self.clf.predict(self.pred_red)
-
-    def compute_features_nb(self, vmin=50, vmax=1000):
-        for val in range(vmin, vmax):
-            pass
-
-    def extract_unlabeled(self):
-        labels = pd.read_csv("data/acb_ii_mini_project_labels.txt", sep='\t')
+    def extract_unlabeled(self, filename=None):
+        filename = filename if filename is not None else "data/labels_miniproj.txt"
+        labels = pd.read_csv(filename, sep='\t')
         indices = labels['ancestry'].isna()
         self.tofind = labels[indices]
-        self.labeled = labels[indices is False]
+        self.labeled = labels[indices == False]
 
-    def load_from_vcf(self, filename='data/out.recode.vcf', printinfo=True, maxval=1000, keep_prev=False):
+    def load_from_vcf(self, filename=None, printinfo=True, maxval=1000, keep_prev=False):
         """
         parloadval read from the filtered vcf file, the names given in df
 
@@ -209,7 +200,95 @@ class Population(object):
         records being read
 
         """
-        vcf_reader = vcf.Reader(open('data/trial1.recode.vcf', 'r'))
+        filename = filename if filename is not None else 'data/' + self.outfile + '.recode.vcf'
+        vcf_reader = vcf.Reader(open(filename, 'r'))
+        if printinfo:
+            print "having " + str(len(vcf_reader.contigs)) + " chromosomes"
+            size = 0
+            for key, val in vcf_reader.contigs.iteritems():
+                size += val.length
+            print "meta :"
+            print vcf_reader.metadata
+            print "genomesize : "
+            print size
+        label_names = list(self.labeled['sample_id'])
+        test_names = list(self.tofind['sample_id'])
+        if not keep_prev:
+            self.train_gt = np.empty((0, len(label_names)), int)
+            self.train_pha = np.empty((0, len(label_names)), bool)
+            self.test_gt = np.empty((0, len(test_names)), int)
+            self.test_pha = np.empty((0, len(test_names)), bool)
+            self.rec = {}
+        else:
+            self.test_pha = self.test_pha.T
+            self.test_gt = self.test_gt.T
+            self.train_pha = self.train_pha.T
+            self.train_gt = self.train_gt.T
+        chrom = -1
+        j = 0
+        numa = 0
+        for record in vcf_reader:
+            if keep_prev:
+                for key, val in self.rec.iteritems():
+                    for key, val2 in val.iteritems():
+                        vcf_reader.next()
+                        numa += 1
+                keep_prev = False
+            print "doing chrom : " + str(record.CHROM) + ', at pos : ' + str(record.POS) + " ,number : " + str(numa + j) + "\r",
+            if record.CHROM != chrom:
+                chrom = record.CHROM
+                if record.CHROM not in self.rec:
+                    self.rec.update({chrom: {}})
+            self.rec[chrom].update({record.POS: [record.REF, record.ALT]})
+            train_gt = np.zeros(len(label_names))
+            train_pha = np.zeros(len(label_names))
+            for i, name in enumerate(label_names):
+                train_gt[i] = record.genotype(name).gt_type if record.genotype(name).gt_type is not None else 0
+                train_pha[i] = record.genotype(name).phased if record.genotype(name).phased is not None else 0
+            test_gt = np.zeros(len(test_names))
+            test_pha = np.zeros(len(test_names))
+            for i, name in enumerate(test_names):
+                test_gt[i] = record.genotype(name).gt_type if record.genotype(name).gt_type is not None else 0
+                test_pha[i] = record.genotype(name).phased if record.genotype(name).phased is not None else 0
+            self.train_gt = np.vstack((self.train_gt, train_gt))
+            self.train_pha = np.vstack((self.train_pha, train_pha))
+            self.test_gt = np.vstack((self.test_gt, test_gt))
+            self.test_pha = np.vstack((self.test_pha, test_pha))
+            j += 1
+            if j > maxval - 1:
+                break
+        # """
+        # we are using numpy, more efficient
+        # we order by individuals x records
+        self.test_pha = self.test_pha.T
+        self.test_gt = self.test_gt.T
+        self.train_pha = self.train_pha.T
+        self.train_gt = self.train_gt.T
+        print ' '  # to jump a line
+        print "PHASE nonzero " + str(np.count_nonzero(self.train_pha))
+        print "SNPs nonzero " + str(np.count_nonzero(self.train_gt))
+        for key, val in self.types.iteritems():
+            print "you have " + str(self.labeled.loc[self.labeled['ancestry'] == key].shape[0]) + " " + str(val) + "in your labeled set"
+
+    # A version in parallel but is finally slower than this one (not optimized enough..)
+    def par_load_from_vcf(self, filename, printinfo=True):
+        filename = filename if filename is not None else 'data/' + self.outfile + '.recode.vcf'
+        vcf_reader = vcf.Reader(open(filename, 'r'))
+        print "dividing the input file.."
+        files = []
+        for i in vcf_reader.contigs.keys():
+            i = str(i)
+            if len(i) < 3:
+                files.append(i)
+                # os.system("vcftools  --vcf  " + filename + " --chr " + i +
+                #         " --recode --recode-INFO-all --out  data/chunks/inpar_ch" + i)
+        label_names = list(self.labeled['sample_id'])
+        test_names = list(self.tofind['sample_id'])
+        self.rec = {}
+        self.train_gt = np.empty((0, len(label_names)), int)
+        self.train_pha = np.empty((0, len(label_names)), bool)
+        self.test_gt = np.empty((0, len(test_names)), int)
+        self.test_pha = np.empty((0, len(test_names)), bool)
         if printinfo:
             print "having " + str(len(vcf_reader.contigs)) + " chromosomes"
             size = 0
@@ -217,74 +296,148 @@ class Population(object):
                 size += val.length
             print vcf_reader.metadata
             print size
-        label_names = list(self.labeled['sample_id'])
-        test_names = list(self.tofin['sample_id'])
-        if not keep_prev:
-            self.rec = {}
-            self.train_gt = []
-            self.train_pha = []
-            self.test_gt = []
-            self.test_pha = []
-        else:
-            self.train_gt = self.train_gt.tolist()
-            self.train_pha = self.train_pha.tolist()
-            self.test_gt = self.test_gt.tolist()
-            self.test_pha = self.test_pha.tolist()
+        print "prints everythig outside of the notebook (stdout problem by the guys of joblib)"
+        print "should be resolved in the next release"
+        vals = Parallel(n_jobs=-1)(delayed(_inpar)(file, label_names, test_names) for file in files)
+        pdb.set_trace()
+        for i, val in enumerate(vals):
+            if len(val[1]) != 0:
+                # wether or not it is equal to zero we consider it is the same for all others
+                self.train_gt = np.vstack((self.train_gt, convertlist(val[1])))
+                self.train_pha = np.vstack((self.train_pha, convertlist(val[2], type=np.bool)))
+                self.test_gt = np.vstack((self.test_gt, convertlist(val[3])))
+                self.test_pha = np.vstack((self.test_pha, convertlist(val[4], type=np.bool)))
+            self.rec.update({files[i]: val[0]})
+        self.test_pha = self.test_pha.T
+        self.test_gt = self.test_gt.T
+        self.train_pha = self.train_pha.T
+        self.train_gt = self.train_gt.T
+        print "PHASE nonzero " + str(np.count_nonzero(self.train_pha))
+        print "SNPs nonzero " + str(np.count_nonzero(self.train_gt))
+        for key, val in self.types.iteritems():
+            print "you have " + str(self.labeled.loc[self.labeled['ancestry'] == key].shape[0]) + " " + str(val) + " in your labeled set"
+        os.system("rm *.log")
+        os.system("rm data/*.log")
+        os.system("rm data/chunks/*.log")
 
+    def reduce_features(self, inp=None, topred=None, reducer='pca', n_components=500, val='gt'):
+        self.nbcomp = n_components
+        self.valofinterest = val
+        if inp is None:
+            inp = self.train_gt if val is 'gt' else self.train_pha
+        if topred is None:
+            topred = self.test_gt if val is 'gt' else self.test_pha
+        toreduce = np.vstack((inp, topred))
+        if reducer is 'pca':
+            redu = PCA(n_components=n_components)
+        red = redu.fit_transform(toreduce)
+        self.train_red = red[:inp.shape[0]]
+        self.pred_red = red[inp.shape[0]:]
+
+    def train_classifier(self, inp=None, classifier='knn', test='CV', scoring='accuracy', percentage=0.3):
+        if inp is None:
+            inp = self.train_red
+        self.classifier = classifier
+        if classifier is 'adaboost':
+            self.clf = AdaBoostClassifier(n_estimators=self.nbcomp * 0.7)
+        elif classifier is 'knn':
+            self.clf = NearestCentroid()
+        elif classifier is 'svm':
+            self.clf = SVC(C=1.0, kernel='rbf', degree=3, gamma='auto', coef0=0.0, shrinking=True,
+                           probability=False, tol=0.001, cache_size=200, class_weight=None, verbose=False, max_iter=-1)
+        if test is 'CV':
+            scores = cross_val_score(self.clf, inp, self.labeled['ancestry'], scoring=scoring, cv=3, n_jobs=1)
+            print "cv scores : " + str(scores)
+            score = np.mean(scores)
+        elif test is 'reg':
+            X_train, X_test, y_train, y_test = self.get_training_data(inp, percentage=0.3)
+            self.clf.fit(X_train, y_train)
+            y_pred = self.clf.predict(X_test)
+            score = accuracy_score(y_test, y_pred)
+        print "the total score is of " + score
+        return score
+
+    def predict_labels(self, inp):
+        """
+        give it an input (that you have been passed already to the PCA algorithm)
+        """
+        if self.clf is not None:
+            self.found = self.clf.predict(inp) if inp is not None else self.clf.predict(self.pred_red)
+            return self.found
+
+    def compute_features_nb(self, classifier='knn', vmin=50, vmax=1000, step=10):
+        """
+        computes the number of features that is the best with a simple gready search
+        does not count as training
+
+        Params:
+        ------
+        classifier: string : name of the classifier for which you want to the best number of
+        features
+        vmin : int minimal value
+        vmax :
+        step :
+
+        Returns:
+        -------
+        a plt plot
+        scores : np.array the ordered list of best scores
+        vals: list the corresponding ordered values
+
+        """
+        vals = range(vmin, vmax, step)
+        scores = np.array(len(vals))
+        for i, val in enumerate(vals):
+            self.reducedim(n_components=val)
+            score = self.train_classifier(classifier=classifier)
+            scores[i] = score
+        plt.plot(scores, vals)
+        ind = np.argsort(scores)
+        scores[:] = scores[ind]
+        vals = [vals[i] for i in ind]
+        return scores, vals
+
+
+def _inpar(chrom, label_names, test_names):
+    """
+    a private function that is called by par_load_from_vcf and should not be used by user
+    to understand this function please see load_from_vcf
+    """
+    rec = {}
+    dtrain_gt = []
+    dtrain_pha = []
+    dtest_gt = []
+    dtest_pha = []
+    vcf_reader = vcf.Reader(open("data/chunks/inpar_ch" + chrom + ".recode.vcf", 'r'))
+    for i, record in enumerate(vcf_reader):
         train_gt = []
         train_pha = []
         test_gt = []
         test_pha = []
-        """
-        # A version in parallel but is finally slower than this one (not optimized enough..)
-        def inpar(record, names):
-            print "doing position : " + str(record.POS)
-            gt = []
-            pha = []
-            rec = [record.CHROM, record.POS, record.REF, record.ALT]
-            for name in names:
-                gt.append(record.genotype(name).gt_type)
-                pha.append(record.genotype(name).phased)
-            return [gt, pha, rec]
-        values = Parallel(n_jobs=-1)(delayed(inpar)(record, names) for record in vcf_reader)
-        for val in values:
-            gt.append(val[0])
-            pha.append(val[1])
-            rec.append(val[2])
-        """
-        has = False
-        chrom = -1
-        for i, record in enumerate(vcf_reader):
-            if keep_prev and self.rec[record.CHROM] is not None:
-                if self.rec[record.CHROM][record.POS] is not None:
-                    has = True
-            if not has:
-                print "doing chrom,pos : " + str(record.CHROM) + ',' + str(record.POS) + "\r",
-                if record.CHROM != chrom:
-                    chrom = record.CHROM
-                    self.rec.update({chrom: {}})
-                self.rec[chrom].update({record.POS: [record.REF, record.ALT]})
-                for name in label_names:
-                    train_gt.append(record.genotype(name).gt_type)
-                    train_pha.append(record.genotype(name).phased)
-                for name in test_names:
-                    test_gt.append(record.genotype(name).gt_type)
-                    test_pha.append(record.genotype(name).phased)
-                self.train_gt.append(train_gt)
-                self.train_pha.append(train_pha)
-                self.test_gt.append(test_gt)
-                self.test_pha.append(test_pha)
-            if i >= maxval:
-                break
-        # """
-        # we are using numpy, more efficient
-        # we order by individuals x records
-        self.test_pha = np.array(self.test_pha, dtype=np.bool).T
-        self.test_gt = np.array(self.test_gt).T
-        self.train_pha = np.array(self.train_pha, dtype=np.bool).T
-        self.train_gt = np.array(self.train_gt).T
-        print "PHASE nonzero " + str(np.count_nonzero(train_pha))
-        print "SNPs nonzero " + str(np.count_nonzero(train_gt))
-        for key, val in self.types:
-            print "you have " + self.labeled.loc[self.labeled['ancestry'] == key].shape[0] + " " + val + "in your labeled set"
-        print "we have a dataset of "
+        if i % 500 == 0:
+            print "done " + str(i) + " of chrom " + str(chrom)
+        if record.CHROM != chrom:
+            raise ValueError("the file has another type of chromosomes")
+        rec.update({record.POS: [record.REF, record.ALT]})
+        for name in label_names:
+            train_gt.append(record.genotype(name).gt_type if record.genotype(name).gt_type is not None else 0)
+            train_pha.append(record.genotype(name).phased if record.genotype(name).phased is not None else 0)
+        for name in test_names:
+            test_gt.append(record.genotype(name).gt_type if record.genotype(name).gt_type is not None else 0)
+            test_pha.append(record.genotype(name).phased if record.genotype(name).phased is not None else 0)
+        dtrain_gt.append(train_gt)
+        dtrain_pha.append(train_pha)
+        dtest_gt.append(test_gt)
+        dtest_pha.append(test_pha)
+    print "finished chrom " + str(chrom)
+    return [rec, dtrain_gt, dtrain_pha, dtest_gt, dtest_pha]
+
+
+def convertlist(longlist, type=None):
+    """
+    it makes the conversion of list of lists to np array, faster than np.array
+    enter list of list
+    ouput array of type, type
+    """
+    tmp = list(chain.from_iterable(longlist))
+    return np.array(tmp, dtype=type).reshape((len(longlist), len(longlist[0])))
