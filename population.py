@@ -13,7 +13,7 @@
 import os
 from itertools import chain
 import numpy as np
-from sklearn.decomposition import PCA
+from sklearn.decomposition import PCA, TruncatedSVD, SparsePCA, KernelPCA
 import pandas as pd
 import vcf
 from sklearn.model_selection import train_test_split
@@ -23,6 +23,7 @@ from sklearn.neighbors.nearest_centroid import NearestCentroid
 from sklearn.ensemble import AdaBoostClassifier
 from sklearn.metrics import accuracy_score
 from sklearn.svm import SVC
+from sklearn.gaussian_process import GaussianProcessClassifier as GCP
 import time
 from joblib import Parallel, delayed
 from matplotlib import pyplot as plt
@@ -30,7 +31,6 @@ try:
     from urllib2 import urlopen as urlopen
 except ImportError:
     from urllib.request import urlopen as urlopen
-import pdb
 
 
 class Population(object):
@@ -40,10 +40,14 @@ class Population(object):
              'nfe': 'non finish european',
              'sas': 'south asian',
              'afr': 'african',
-             'amr': 'mixed american'}
+             'amr': 'mixed american',
+             'nan': 'unknown',
+             'fin': 'finish'}
 
-    dataset = {'labels_miniproj.txt': 'https://www.dropbox.com/s/dmgchsjklm1jvgk/acb_ii_mini_project_labels.txt?dl=1',
-               'data_miniproj.vcf.bgz': 'https://www.dropbox.com/s/iq8c81awi31067c/acb_ii_mini_project.vcf.bgz?dl=1'}
+    dataset = {'labels_miniproj.txt': 'https://www.dropbox.com/s/dmgchsjklm1jvgk/\
+    acb_ii_mini_project_labels.txt?dl=1',
+               'data_miniproj.vcf.bgz': 'https://www.dropbox.com/s/iq8c81awi31067c/\
+    acb_ii_mini_project.vcf.bgz?dl=1'}
     maxallelefreq = None
     callrate = None
     outfile = None
@@ -64,9 +68,10 @@ class Population(object):
 
     def __init__(self):
         super(Population, self).__init__()
+        os.system('mkdir data')
 
     def __getitem__(self, key):
-        print self.types[list(self.labeled.loc[self.labeled['sample_id'] == key]['ancestry'])[0]]
+        print self.types[list(self.all.loc[self.all['sample_id'] == key]['ancestry'])[0]]
 
     def __len__(self):
         return (self.labeled.shape[0], self.tofind.shape[0]) if self.labeled is not None else 0
@@ -74,10 +79,17 @@ class Population(object):
     def __iter__(self, labeled=True):
         return iter(list(self.labeled['sample_id']))
 
+    def keys(self):
+        return list(self.all['sample_id']).__iter__()
+
+    def values(self):
+        return list(self.all['ancestry']).__iter__()
+
 # Utilities
 
     def _get_training_data(self, inp, percentage=0.3):
-        X_train, X_test, y_train, y_test = train_test_split(inp, self.labeled['ancestry'], test_size=percentage, random_state=0)
+        X_train, X_test, y_train, y_test = train_test_split(inp, self.labeled['ancestry'],
+                                                            test_size=percentage, random_state=0)
         return X_train, X_test, y_train, y_test
 
 # Functions
@@ -103,7 +115,8 @@ class Population(object):
             else:
                 print "file is already there"
 
-    def filter_variants(self, name="data/data_miniproj.vcf.bgz", out="out", minmissing=30000, maxr2=0.01, callrate=0.8, maxallelefreq=0.01):
+    def filter_variants(self, name="data/data_miniproj.vcf.bgz", out="out",
+                        minmissing=30000, maxr2=0.01, callrate=0.8, maxallelefreq=0.01):
         """
         Successful, clean PCA on human genetic data will require
         filtering data to high-quality variants that are linkage disequilibrium (LD)-pruned.
@@ -124,11 +137,12 @@ class Population(object):
         filt += ' --max-missing ' + str(callrate)
         print "applying first filter"
         os.system(filt)
-        print "applying first filter"
+        print "applying second filter"
         os.system('vcftools --vcf "data/lowDPbefore.recode.vcf" --missing-indv --out data/out')
         print "finding if too much missing individuals and recoding the file"
         os.system("mawk '$4 > 30000' data/out.imiss | cut -f1 > data/lowDP.indv")
-        os.system("vcftools --vcf 'data/lowDPbefore.recode.vcf' --recode --remove data/lowDP.indv --out data/filtered2")
+        os.system("vcftools --vcf 'data/lowDPbefore.recode.vcf' --recode --remove data/lowDP.indv\
+         --out data/filtered2")
         print "removing garbage.."
         os.system('rm data/lowDP*')
 
@@ -145,7 +159,8 @@ class Population(object):
             i = str(i)
             if len(i) < 3:
                 os.system("vcftools --vcf data/chunks/VCF_ch" + i +
-                          ".recode.vcf --min-r2 0.1 --geno-r2 --out data/chunks/filtVCF_ch" + i + " &")
+                          ".recode.vcf --min-r2 0.1 --geno-r2 --out data/chunks/filtVCF_ch" +
+                          i + " &")
         start = time.time()
         while(True):
             nbjob = 0
@@ -167,7 +182,8 @@ class Population(object):
         os.system('rm data/*.log')
         os.system('cat data/chunks/filtVCF_ch* > data/all_VCF.geno.lg')
         print "now prunning..."
-        os.system('vcftools --vcf data/filtered2.recode.vcf --exclude-positions data/all_VCF.geno.lg --recode --out data/' + out)
+        os.system('vcftools --vcf data/filtered2.recode.vcf --exclude-positions \
+            data/all_VCF.geno.lg --recode --out data/' + out)
 
     def extract_unlabeled(self, filename=None):
         filename = filename if filename is not None else "data/labels_miniproj.txt"
@@ -175,6 +191,7 @@ class Population(object):
         indices = labels['ancestry'].isna()
         self.tofind = labels[indices]
         self.labeled = labels[indices == False]
+        self.all = pd.concat([self.labeled, self.tofind])
 
     def load_from_vcf(self, filename=None, printinfo=True, maxval=1000, keep_prev=False):
         """
@@ -227,6 +244,7 @@ class Population(object):
         chrom = -1
         j = 0
         numa = 0
+        count = 0
         for record in vcf_reader:
             if keep_prev:
                 for key, val in self.rec.iteritems():
@@ -234,7 +252,9 @@ class Population(object):
                         vcf_reader.next()
                         numa += 1
                 keep_prev = False
-            print "doing chrom : " + str(record.CHROM) + ', at pos : ' + str(record.POS) + " ,number : " + str(numa + j) + "\r",
+            count = numa + j
+            print "doing chrom : " + str(record.CHROM) + ', at pos : ' + str(record.POS)\
+                + " ,number : " + str(count) + "\r",
             if record.CHROM != chrom:
                 chrom = record.CHROM
                 if record.CHROM not in self.rec:
@@ -243,13 +263,18 @@ class Population(object):
             train_gt = np.zeros(len(label_names))
             train_pha = np.zeros(len(label_names))
             for i, name in enumerate(label_names):
-                train_gt[i] = record.genotype(name).gt_type if record.genotype(name).gt_type is not None else 0
-                train_pha[i] = record.genotype(name).phased if record.genotype(name).phased is not None else 0
+                train_gt[i] = record.genotype(
+                    name).gt_type if record.genotype(name).gt_type is not None else 0
+                train_pha[i] = record.genotype(
+                    name).phased if record.genotype(name).phased is not None else 0
+
             test_gt = np.zeros(len(test_names))
             test_pha = np.zeros(len(test_names))
             for i, name in enumerate(test_names):
-                test_gt[i] = record.genotype(name).gt_type if record.genotype(name).gt_type is not None else 0
-                test_pha[i] = record.genotype(name).phased if record.genotype(name).phased is not None else 0
+                test_gt[i] = record.genotype(
+                    name).gt_type if record.genotype(name).gt_type is not None else 0
+                test_pha[i] = record.genotype(
+                    name).phased if record.genotype(name).phased is not None else 0
             self.train_gt = np.vstack((self.train_gt, train_gt))
             self.train_pha = np.vstack((self.train_pha, train_pha))
             self.test_gt = np.vstack((self.test_gt, test_gt))
@@ -268,10 +293,15 @@ class Population(object):
         print "PHASE nonzero " + str(np.count_nonzero(self.train_pha))
         print "SNPs nonzero " + str(np.count_nonzero(self.train_gt))
         for key, val in self.types.iteritems():
-            print "you have " + str(self.labeled.loc[self.labeled['ancestry'] == key].shape[0]) + " " + str(val) + "in your labeled set"
+            print "you have " + str(self.labeled.loc[self.labeled['ancestry'] == key].shape[0])\
+                + " " + str(val) + "in your labeled set"
 
-    # A version in parallel but is finally slower than this one (not optimized enough..)
     def par_load_from_vcf(self, filename, printinfo=True):
+        """
+        the parallel version of loadfromvcf,should be way faster
+
+        same inputs but reduced choice for now
+        """
         filename = filename if filename is not None else 'data/' + self.outfile + '.recode.vcf'
         vcf_reader = vcf.Reader(open(filename, 'r'))
         print "dividing the input file.."
@@ -299,7 +329,6 @@ class Population(object):
         print "prints everythig outside of the notebook (stdout problem by the guys of joblib)"
         print "should be resolved in the next release"
         vals = Parallel(n_jobs=-1)(delayed(_inpar)(file, label_names, test_names) for file in files)
-        pdb.set_trace()
         for i, val in enumerate(vals):
             if len(val[1]) != 0:
                 # wether or not it is equal to zero we consider it is the same for all others
@@ -315,38 +344,107 @@ class Population(object):
         print "PHASE nonzero " + str(np.count_nonzero(self.train_pha))
         print "SNPs nonzero " + str(np.count_nonzero(self.train_gt))
         for key, val in self.types.iteritems():
-            print "you have " + str(self.labeled.loc[self.labeled['ancestry'] == key].shape[0]) + " " + str(val) + " in your labeled set"
+            print "you have " + str(self.labeled.loc[self.labeled['ancestry'] == key].shape[0])
+            + " " + str(val) + " in your labeled set"
         os.system("rm *.log")
         os.system("rm data/*.log")
         os.system("rm data/chunks/*.log")
 
-    def reduce_features(self, inp=None, topred=None, reducer='pca', n_components=500, val='gt'):
+    def reduce_features(self, inp=None, topred=None, reducer='pca', n_components=500, val='gt',
+                        retrain=True):
+        """
+        will use a dimensionality reduction algorithm to reduce the number of features of the dataset
+
+        you can pass it you own inputs or use the ones that are stored in the file
+
+        Params:
+        ------
+        inp: np.array[values,features],the input array you have and want to reduce and will train on
+        topred: np.array[values,features], the input array you have and want to reduce and predict
+        reducer: str, the reducer algorithm to use (pca,)
+        n_components : int, the final number of features in your reduced dataset
+        val : str (gt|pha), to see if there is any predictibility using phasing..
+        retrain: flag, set to false if you already have trained the PCA and don't want to restart
+        (espacially important if you consider to compare two different datasets)
+
+        Outs:
+        ----
+        nbcomp: saves the number of components
+        valofinterest: the value of interest (val)
+        train_red, pred_red: and the reduced train and pred arrays 
+        """
         self.nbcomp = n_components
         self.valofinterest = val
         if inp is None:
             inp = self.train_gt if val is 'gt' else self.train_pha
-        if topred is None:
+        if topred is None and inp is None:
             topred = self.test_gt if val is 'gt' else self.test_pha
-        toreduce = np.vstack((inp, topred))
+        toreduce = np.vstack((inp, topred)) if topred is not None else inp
         if reducer is 'pca':
             redu = PCA(n_components=n_components)
-        red = redu.fit_transform(toreduce)
+        if reducer is 'kpca':
+            redu = KernelPCA(n_components=n_components, kernel='linear')
+        if reducer is 'spca':
+            redu = SparsePCA(n_components=n_components, alpha=1, ridge_alpha=0.01,
+                             max_iter=1000, method='lars')
+        if reducer is 'lda':
+            redu = TruncatedSVD(n_components=n_components, algorithm='randomized', n_iter=5)
+        red = redu.fit_transform(toreduce) if retrain else redu.fit(toreduce)
         self.train_red = red[:inp.shape[0]]
         self.pred_red = red[inp.shape[0]:]
 
-    def train_classifier(self, inp=None, classifier='knn', test='CV', scoring='accuracy', percentage=0.3):
+    def train_classifier(self, inp=None, labels=None, classifier='knn',
+                         test='CV', scoring='accuracy', percentage=0.3, proba=True, iter=100):
+        """
+        will use a classification algorithm and train it on the training
+        set using the labels and predict its accuracy
+
+        you can pass it your own inputs and labels (be carefull to reduce their features before hand
+        or use the ones that are stored in the file
+
+        Params:
+        ------
+        inp: np.array[values,features], the input array you will train on
+        labels: list of values, the input array you have and want to reduce and predict
+        classifier: str, the classification algorithm to use (adaboost *, knn *****, )
+        test: str, the test algorithm to use (reg,CV)
+        scoring: string, the scoring to use (not all of them work for this type of classification)
+        percentage: float, the percentage of your data that should be used for testing
+        for the regular testing algorithm
+        proba: flag, to say if you want the algorithm to compute the probability of each class
+        (uniquely for the svm)
+        iter: int, number of iterations for the gradient descent of the gaussian mixture classifier
+
+        Returns:
+        ------
+        score, float, the final score the classifier had
+
+        Outs
+        ----
+
+        clf: will save the classifier
+        classifier: and its name
+        """
         if inp is None:
             inp = self.train_red
+        if labels is None:
+            labels = self.labeled['ancestry']
         self.classifier = classifier
         if classifier is 'adaboost':
-            self.clf = AdaBoostClassifier(n_estimators=self.nbcomp * 0.7)
+            self.clf = AdaBoostClassifier(n_estimators=int(self.nbcomp * 0.7))
         elif classifier is 'knn':
             self.clf = NearestCentroid()
         elif classifier is 'svm':
-            self.clf = SVC(C=1.0, kernel='rbf', degree=3, gamma='auto', coef0=0.0, shrinking=True,
-                           probability=False, tol=0.001, cache_size=200, class_weight=None, verbose=False, max_iter=-1)
+            self.clf = SVC(C=1.0, kernel='rbf', degree=3, gamma='auto',
+                           coef0=0.0, shrinking=True,
+                           probability=proba, tol=0.001, cache_size=400,
+                           class_weight=None, verbose=False, max_iter=-1)
+        elif classifier is 'gaussian':
+            self.clf = GCP(max_iter_predict=iter)
+        else:
+            print "unkown classifier"
         if test is 'CV':
-            scores = cross_val_score(self.clf, inp, self.labeled['ancestry'], scoring=scoring, cv=3, n_jobs=1)
+            scores = cross_val_score(self.clf, inp, labels, scoring=scoring, cv=3, n_jobs=1)
             print "cv scores : " + str(scores)
             score = np.mean(scores)
         elif test is 'reg':
@@ -354,15 +452,26 @@ class Population(object):
             self.clf.fit(X_train, y_train)
             y_pred = self.clf.predict(X_test)
             score = accuracy_score(y_test, y_pred)
-        print "the total score is of " + score
+        self.clf.fit(inp, labels)
+        print "the total score is of " + str(score)
         return score
 
-    def predict_labels(self, inp):
+    def predict_labels(self, inp=None):
         """
-        give it an input (that you have been passed already to the PCA algorithm)
+        give it an input (that you have been passed already to the PCA algorithm precising
+        that it has already been trained) and gives you the labels
+
+        Params:
+        ------
+        inp: np.array[values,features], the input array you will train on ( optional)
+
+        Returns:
+        -------
+        found : list, of found values (saved in the class)
         """
         if self.clf is not None:
-            self.found = self.clf.predict(inp) if inp is not None else self.clf.predict(self.pred_red)
+            self.found = self.clf.predict(inp) if inp is not None else self.clf.predict(
+                self.pred_red)
             return self.found
 
     def compute_features_nb(self, classifier='knn', vmin=50, vmax=1000, step=10):
@@ -386,7 +495,7 @@ class Population(object):
 
         """
         vals = range(vmin, vmax, step)
-        scores = np.array(len(vals))
+        scores = np.zeros(len(vals))
         for i, val in enumerate(vals):
             self.reducedim(n_components=val)
             score = self.train_classifier(classifier=classifier)
@@ -420,11 +529,15 @@ def _inpar(chrom, label_names, test_names):
             raise ValueError("the file has another type of chromosomes")
         rec.update({record.POS: [record.REF, record.ALT]})
         for name in label_names:
-            train_gt.append(record.genotype(name).gt_type if record.genotype(name).gt_type is not None else 0)
-            train_pha.append(record.genotype(name).phased if record.genotype(name).phased is not None else 0)
+            train_gt.append(record.genotype(
+                name).gt_type if record.genotype(name).gt_type is not None else 0)
+            train_pha.append(record.genotype(
+                name).phased if record.genotype(name).phased is not None else 0)
         for name in test_names:
-            test_gt.append(record.genotype(name).gt_type if record.genotype(name).gt_type is not None else 0)
-            test_pha.append(record.genotype(name).phased if record.genotype(name).phased is not None else 0)
+            test_gt.append(record.genotype(
+                name).gt_type if record.genotype(name).gt_type is not None else 0)
+            test_pha.append(record.genotype(
+                name).phased if record.genotype(name).phased is not None else 0)
         dtrain_gt.append(train_gt)
         dtrain_pha.append(train_pha)
         dtest_gt.append(test_gt)
