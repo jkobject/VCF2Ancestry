@@ -31,6 +31,7 @@ try:
     from urllib2 import urlopen as urlopen
 except ImportError:
     from urllib.request import urlopen as urlopen
+import pdb
 
 
 class Population(object):
@@ -71,7 +72,7 @@ class Population(object):
         os.system('mkdir data')
 
     def __getitem__(self, key):
-        print self.types[list(self.all.loc[self.all['sample_id'] == key]['ancestry'])[0]]
+        print self.types[str(list(self.all.loc[self.all['sample_id'] == key]['ancestry'])[0])]
 
     def __len__(self):
         return (self.labeled.shape[0], self.tofind.shape[0]) if self.labeled is not None else 0
@@ -253,8 +254,7 @@ class Population(object):
                         numa += 1
                 keep_prev = False
             count = numa + j
-            print "doing chrom : " + str(record.CHROM) + ', at pos : ' + str(record.POS)\
-                + " ,number : " + str(count) + "\r",
+            print str(count) + " doing chrom : " + str(record.CHROM) + ', at pos : ' + str(record.POS) + "\r",
             if record.CHROM != chrom:
                 chrom = record.CHROM
                 if record.CHROM not in self.rec:
@@ -294,7 +294,7 @@ class Population(object):
         print "SNPs nonzero " + str(np.count_nonzero(self.train_gt))
         for key, val in self.types.iteritems():
             print "you have " + str(self.labeled.loc[self.labeled['ancestry'] == key].shape[0])\
-                + " " + str(val) + "in your labeled set"
+                + " " + str(val) + " in your labeled set"
 
     def par_load_from_vcf(self, filename, printinfo=True):
         """
@@ -305,13 +305,14 @@ class Population(object):
         filename = filename if filename is not None else 'data/' + self.outfile + '.recode.vcf'
         vcf_reader = vcf.Reader(open(filename, 'r'))
         print "dividing the input file.."
+
         files = []
         for i in vcf_reader.contigs.keys():
             i = str(i)
             if len(i) < 3:
                 files.append(i)
-                # os.system("vcftools  --vcf  " + filename + " --chr " + i +
-                #         " --recode --recode-INFO-all --out  data/chunks/inpar_ch" + i)
+                os.system("vcftools  --vcf  " + filename + " --chr " + i +
+                          " --recode --recode-INFO-all --out  data/chunks/inpar_ch" + i)
         label_names = list(self.labeled['sample_id'])
         test_names = list(self.tofind['sample_id'])
         self.rec = {}
@@ -326,8 +327,6 @@ class Population(object):
                 size += val.length
             print vcf_reader.metadata
             print size
-        print "prints everythig outside of the notebook (stdout problem by the guys of joblib)"
-        print "should be resolved in the next release"
         vals = Parallel(n_jobs=-1)(delayed(_inpar)(file, label_names, test_names) for file in files)
         for i, val in enumerate(vals):
             if len(val[1]) != 0:
@@ -344,8 +343,8 @@ class Population(object):
         print "PHASE nonzero " + str(np.count_nonzero(self.train_pha))
         print "SNPs nonzero " + str(np.count_nonzero(self.train_gt))
         for key, val in self.types.iteritems():
-            print "you have " + str(self.labeled.loc[self.labeled['ancestry'] == key].shape[0])
-            + " " + str(val) + " in your labeled set"
+            print "you have " + str(self.labeled.loc[self.labeled['ancestry'] == key].shape[0])\
+                + " " + str(val) + " in your labeled set"
         os.system("rm *.log")
         os.system("rm data/*.log")
         os.system("rm data/chunks/*.log")
@@ -371,14 +370,14 @@ class Population(object):
         ----
         nbcomp: saves the number of components
         valofinterest: the value of interest (val)
-        train_red, pred_red: and the reduced train and pred arrays 
+        train_red, pred_red: and the reduced train and pred arrays
         """
         self.nbcomp = n_components
         self.valofinterest = val
-        if inp is None:
-            inp = self.train_gt if val is 'gt' else self.train_pha
         if topred is None and inp is None:
             topred = self.test_gt if val is 'gt' else self.test_pha
+        if inp is None:
+            inp = self.train_gt if val is 'gt' else self.train_pha
         toreduce = np.vstack((inp, topred)) if topred is not None else inp
         if reducer is 'pca':
             redu = PCA(n_components=n_components)
@@ -386,7 +385,7 @@ class Population(object):
             redu = KernelPCA(n_components=n_components, kernel='linear')
         if reducer is 'spca':
             redu = SparsePCA(n_components=n_components, alpha=1, ridge_alpha=0.01,
-                             max_iter=1000, method='lars')
+                             max_iter=1000, method='lars', n_jobs=-1)
         if reducer is 'lda':
             redu = TruncatedSVD(n_components=n_components, algorithm='randomized', n_iter=5)
         red = redu.fit_transform(toreduce) if retrain else redu.fit(toreduce)
@@ -406,7 +405,7 @@ class Population(object):
         ------
         inp: np.array[values,features], the input array you will train on
         labels: list of values, the input array you have and want to reduce and predict
-        classifier: str, the classification algorithm to use (adaboost *, knn *****, )
+        classifier: str, the classification algorithm to use (adaboost *, knn *****, svm *****, gaussian ** )
         test: str, the test algorithm to use (reg,CV)
         scoring: string, the scoring to use (not all of them work for this type of classification)
         percentage: float, the percentage of your data that should be used for testing
@@ -448,7 +447,7 @@ class Population(object):
             print "cv scores : " + str(scores)
             score = np.mean(scores)
         elif test is 'reg':
-            X_train, X_test, y_train, y_test = self.get_training_data(inp, percentage=0.3)
+            X_train, X_test, y_train, y_test = self._get_training_data(inp, percentage=0.3)
             self.clf.fit(X_train, y_train)
             y_pred = self.clf.predict(X_test)
             score = accuracy_score(y_test, y_pred)
@@ -474,7 +473,7 @@ class Population(object):
                 self.pred_red)
             return self.found
 
-    def compute_features_nb(self, classifier='knn', vmin=50, vmax=1000, step=10):
+    def compute_features_nb(self, classifier='knn', reducer='pca', vmin=50, vmax=1000, step=10):
         """
         computes the number of features that is the best with a simple gready search
         does not count as training
@@ -497,7 +496,7 @@ class Population(object):
         vals = range(vmin, vmax, step)
         scores = np.zeros(len(vals))
         for i, val in enumerate(vals):
-            self.reducedim(n_components=val)
+            self.reducedim(n_components=val, reducer=reducer)
             score = self.train_classifier(classifier=classifier)
             scores[i] = score
         plt.plot(scores, vals)

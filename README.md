@@ -17,7 +17,15 @@ pip install -r requirements.txt
 now you can launch a jupyter notebook or python
 and execute the commands
 
-## What you can do 
+#### requirements :
+python 2.7
+conda
+jupyter notebook
+mawk
+cut
+cat
+vcftools
+
 
 ## TODO
 
