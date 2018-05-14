@@ -52,5 +52,7 @@ We could use Naive Bayes to guess missing values
 
 
 Jérémie KALFON for BroadInstitute
+
 jkobject@gmail.com
+
 jkobject.com
