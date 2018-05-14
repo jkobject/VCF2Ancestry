@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # PCA for Infering Genetic Ancestry:
 
 Coded by Jérémie KALFON in Python2 + vcftools for the BroadInstitute
@@ -55,10 +54,3 @@ We could use Naive Bayes to guess missing values
 Jérémie KALFON for BroadInstitute
 jkobject@gmail.com
 jkobject.com
-
-
-
-=======
-# hiring
-Repo for projects completed by hiring candidates
->>>>>>> 3299c00798e2ab84781fcfe8a640823dbce71694
