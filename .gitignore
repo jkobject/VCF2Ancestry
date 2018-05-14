@@ -11,7 +11,7 @@
 *.gdoc
 data/*
 other/*
-
+!data/save/
 
 ### JupyterNotebook ###
 .ipynb_checkpoints

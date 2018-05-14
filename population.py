@@ -10,32 +10,40 @@
 # A visualization of the distribution of PC values for each sample in the call set,
 # along with the labeled and predicted ancestry classifications
 
-import os
-from itertools import chain
+
 import numpy as np
-from sklearn.decomposition import PCA, TruncatedSVD, SparsePCA, KernelPCA
 import pandas as pd
-import vcf
+from sklearn.decomposition import PCA, TruncatedSVD, SparsePCA, KernelPCA
 from sklearn.model_selection import train_test_split
-import psutil
 from sklearn.model_selection import cross_val_score
 from sklearn.neighbors.nearest_centroid import NearestCentroid
 from sklearn.ensemble import AdaBoostClassifier
 from sklearn.metrics import accuracy_score
 from sklearn.svm import SVC
 from sklearn.gaussian_process import GaussianProcessClassifier as GCP
+from sklearn.manifold import TSNE
+
 import time
+import os
+import json
+from itertools import chain
+import vcf
+import psutil
 from joblib import Parallel, delayed
+
 from matplotlib import pyplot as plt
+from bokeh.plotting import *
+from bokeh.models import *
+
 try:
     from urllib2 import urlopen as urlopen
 except ImportError:
     from urllib.request import urlopen as urlopen
-import pdb
 
 
 class Population(object):
-    """docstring for Population"""
+    """Popultation object containing every function and 
+    data structures  to run for the pipeline"""
 
     types = {'eas': 'east asian',
              'nfe': 'non finish european',
@@ -49,6 +57,7 @@ class Population(object):
     acb_ii_mini_project_labels.txt?dl=1',
                'data_miniproj.vcf.bgz': 'https://www.dropbox.com/s/iq8c81awi31067c/\
     acb_ii_mini_project.vcf.bgz?dl=1'}
+
     maxallelefreq = None
     callrate = None
     outfile = None
@@ -72,18 +81,30 @@ class Population(object):
         os.system('mkdir data')
 
     def __getitem__(self, key):
+        """
+        you can get an item as with a dictionary
+        """
         print self.types[str(list(self.all.loc[self.all['sample_id'] == key]['ancestry'])[0])]
 
     def __len__(self):
         return (self.labeled.shape[0], self.tofind.shape[0]) if self.labeled is not None else 0
 
     def __iter__(self, labeled=True):
+        """
+        you can get iterate as with a dictionary
+        """
         return iter(list(self.labeled['sample_id']))
 
     def keys(self):
+        """
+        you can get the keys as with a dictionary
+        """
         return list(self.all['sample_id']).__iter__()
 
     def values(self):
+        """
+        you can get the values as with a dictionary
+        """
         return list(self.all['ancestry']).__iter__()
 
 # Utilities
@@ -96,6 +117,15 @@ class Population(object):
 # Functions
 
     def load_dataset(self, filename=None, url=None):
+        """
+        load the data from dropbox in case the user don't have it already
+        you can load your own dataset from anywhere 
+
+        Params:
+        ------
+        filename: str, the file name
+        url: str, the url
+        """
         if filename is None:
             for key, val in self.dataset.iteritems():
                 if not os.path.exists('data/' + key):
@@ -116,7 +146,7 @@ class Population(object):
             else:
                 print "file is already there"
 
-    def filter_variants(self, name="data/data_miniproj.vcf.bgz", out="out",
+    def filter_variants(self, name="data/data_miniproj.vcf.bgz", out="out", onlypruning=False,
                         minmissing=30000, maxr2=0.01, callrate=0.8, maxallelefreq=0.01):
         """
         Successful, clean PCA on human genetic data will require
@@ -128,24 +158,25 @@ class Population(object):
         min missing r2
 
         """
-        print "assuming you have mawk, vcftools, cat, cut installed"
-        self.maxallelefreq = maxallelefreq
-        self.callrate = callrate
-        self.outfile = out
-        filt = "vcftools --gzvcf '" + name + "' --recode --out data/lowDPbefore"
-        filt += " --maf " + str(maxallelefreq)
-        filt += ' --min-alleles 2 --max-alleles 2'
-        filt += ' --max-missing ' + str(callrate)
-        print "applying first filter"
-        os.system(filt)
-        print "applying second filter"
-        os.system('vcftools --vcf "data/lowDPbefore.recode.vcf" --missing-indv --out data/out')
-        print "finding if too much missing individuals and recoding the file"
-        os.system("mawk '$4 > 30000' data/out.imiss | cut -f1 > data/lowDP.indv")
-        os.system("vcftools --vcf 'data/lowDPbefore.recode.vcf' --recode --remove data/lowDP.indv\
-         --out data/filtered2")
-        print "removing garbage.."
-        os.system('rm data/lowDP*')
+        if not onlypruning:
+            print "assuming you have mawk, vcftools, cat, cut installed"
+            self.maxallelefreq = maxallelefreq
+            self.callrate = callrate
+            self.outfile = out
+            filt = "vcftools --gzvcf '" + name + "' --recode --out data/lowDPbefore"
+            filt += " --maf " + str(maxallelefreq)
+            filt += ' --min-alleles 2 --max-alleles 2'
+            filt += ' --max-missing ' + str(callrate)
+            print "applying first filter"
+            os.system(filt)
+            print "applying second filter"
+            os.system('vcftools --vcf "data/lowDPbefore.recode.vcf" --missing-indv --out data/out')
+            print "finding if too much missing individuals and recoding the file"
+            os.system("mawk '$4 > 30000' data/out.imiss | cut -f1 > data/lowDP.indv")
+            os.system("vcftools --vcf 'data/lowDPbefore.recode.vcf' --recode --remove data/lowDP.indv\
+             --out data/filtered2")
+            print "removing garbage.."
+            os.system('rm data/lowDP*')
 
         vcf_reader = vcf.Reader(open('data/filtered2.recode.vcf', 'r'))
         os.system('mkdir data/chunks')
@@ -392,7 +423,7 @@ class Population(object):
         self.train_red = red[:inp.shape[0]]
         self.pred_red = red[inp.shape[0]:]
 
-    def train_classifier(self, inp=None, labels=None, classifier='knn',
+    def train_classifier(self, inp=None, labels=None, classifier='knn', train=True,
                          test='CV', scoring='accuracy', percentage=0.3, proba=True, iter=100):
         """
         will use a classification algorithm and train it on the training
@@ -405,7 +436,7 @@ class Population(object):
         ------
         inp: np.array[values,features], the input array you will train on
         labels: list of values, the input array you have and want to reduce and predict
-        classifier: str, the classification algorithm to use (adaboost *, knn *****, svm *****, gaussian ** )
+        classifier: str, the classification algorithm to use (adaboost *, knn *****, svm *****, gaussian **** )
         test: str, the test algorithm to use (reg,CV)
         scoring: string, the scoring to use (not all of them work for this type of classification)
         percentage: float, the percentage of your data that should be used for testing
@@ -451,7 +482,7 @@ class Population(object):
             self.clf.fit(X_train, y_train)
             y_pred = self.clf.predict(X_test)
             score = accuracy_score(y_test, y_pred)
-        self.clf.fit(inp, labels)
+        self.clf.fit(inp, labels) if train else None
         print "the total score is of " + str(score)
         return score
 
@@ -469,8 +500,29 @@ class Population(object):
         found : list, of found values (saved in the class)
         """
         if self.clf is not None:
-            self.found = self.clf.predict(inp) if inp is not None else self.clf.predict(
-                self.pred_red)
+            if self.classifier is 'svm':
+                founde = []
+                print "not checking that you are using svm"
+                self.found = self.clf.predict_proba(inp) if inp is not None else self.clf.predict_proba(
+                    self.pred_red)
+                for x, i in enumerate(self.tofind['sample_id']):
+                    print '----------------------'
+                    print str(i) + 'has:'
+                    y = 0
+                    a = 'U'
+                    for key in self.types.keys():
+                        if key is not 'nan':
+                            if self.found[x][y] > 0.75:
+                                print "####",
+                                a = self.found[x][y]
+
+                            print str(self.found[x][y]) + "% chance to be " + self.types[key]
+                            y += 1
+                    founde.append([key, a])
+                self.found = founde
+            else:
+                self.found = self.clf.predict(inp) if inp is not None else self.clf.predict(
+                    self.pred_red)
             return self.found
 
     def compute_features_nb(self, classifier='knn', reducer='pca', vmin=50, vmax=1000, step=10):
@@ -496,14 +548,98 @@ class Population(object):
         vals = range(vmin, vmax, step)
         scores = np.zeros(len(vals))
         for i, val in enumerate(vals):
-            self.reducedim(n_components=val, reducer=reducer)
-            score = self.train_classifier(classifier=classifier)
+            self.reduce_features(n_components=val, reducer=reducer)
+            score = self.train_classifier(classifier=classifier, train=False)
             scores[i] = score
-        plt.plot(scores, vals)
+        plt.plot(vals, scores)
         ind = np.argsort(scores)
         scores[:] = scores[ind]
         vals = [vals[i] for i in ind]
         return scores, vals
+
+    def savedata(self, name):
+        """
+        saves the PC values in a gzip file and the labels in a json file
+
+        Params:
+        ------
+        name: str, name of the files n which to save
+        """
+        filename1 = "data/save/" + name + ".json"
+        filename2 = "data/save/" + name + ".gz"
+        print "writing in " + name
+        d = {}
+        for i, val in enumerate(list(self.tofind['sample_id'])):
+            d.update({val: self.found[i]})
+        data = json.dumps(d, indent=4, separators=(',', ': '))
+        dirname = os.path.dirname(filename1)
+        if not os.path.exists(dirname):
+            os.makedirs(dirname)
+        with open(filename1, 'w') as f:
+            f.write(data)
+        np.savetxt(filename2, np.vstack((self.train_red, self.pred_red)))
+        print "it worked !"
+
+    def plotPC(self, interactive=False, foundplot=True):
+        """
+        will plot the features that have been extracted by the reducer algorithm
+        it has nice features such as a color for each label and an interactive
+        plot to zoom and analyze each different individual
+
+        Params:
+        -----
+        Interactive: flag, if using bokeh or not to plot
+        foundplot: flag, if add the predicted labels or not
+
+        Returns:
+        -------
+        p: object, the plot object
+        """
+        colormap = {'eas': "#3498db",
+                    'nfe': "#2ecc71",
+                    'sas': "#9b59b6",
+                    'afr': '#34495e',
+                    'amr': '#f1c40f',
+                    'nan': '#000000',
+                    'fin': "#1abc9c",
+                    'U': '#7f8c8d'}
+        if self.found is not None:
+            found = self.found if self.classifier is not'svm' else [i[0] for i in self.found]
+        else:
+            found = list(self.tofind['ancestry'])  # just nans
+        colorslab = [colormap[x] for x in list(self.labeled['ancestry'])]
+        colorsnot = [colormap[str(x)] for x in found] if foundplot else None
+        labels = list(self.labeled['ancestry'])
+        labels.extend(found) if foundplot else None
+        reduced = TSNE(n_components=2, perplexity=30.0, verbose=1,
+                       learning_rate=200.0, n_iter=1000).fit_transform(
+            np.vstack((self.train_red, self.pred_red))if foundplot else self.train_red)
+        colorslab.extend(colorsnot) if foundplot else None
+        if interactive:
+            # names = list(self.labeled['sample_id'])
+            # names.extend(list(self.tofind['sample_id']))
+            print " if you are on a notebook you should write 'from bokeh.io import output_notebook'"
+            source = ColumnDataSource(data=dict(x=reduced[:, 0], y=reduced[:, 1],
+                                                label=["origin : %s" % self.types[x] for x in labels], color=colorslab))
+            # to have the names try to replace with
+            # label=[names[i]+"origin :"+self.types[x] for i,x in enumerate(labels)]
+            output_notebook()
+            hover = HoverTool(tooltips=[
+                ("label", "@label"),
+            ])
+            p = figure(title="T-sne plot of the PC values",
+                       tools=[hover, BoxZoomTool(), WheelZoomTool(), SaveTool(), ResetTool()])
+            p.circle(x='x', y='y', source=source, color='color')
+
+            show(p)
+            output_file(self.classifier + "plot.html")
+            save(p)
+            return p
+        else:
+            fig = plt.figure()
+            ax = fig.add_subplot(111)
+            ax.scatter(reduced[:, 0], reduced[:, 1], c=colorslab)
+            plt.show()
 
 
 def _inpar(chrom, label_names, test_names):
