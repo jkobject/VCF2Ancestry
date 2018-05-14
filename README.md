@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # PCA for Infering Genetic Ancestry:
 
 Coded by Jérémie KALFON in Python2 + vcftools for the BroadInstitute
@@ -57,3 +58,7 @@ jkobject.com
 
 
 
+=======
+# hiring
+Repo for projects completed by hiring candidates
+>>>>>>> 3299c00798e2ab84781fcfe8a640823dbce71694
