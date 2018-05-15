@@ -436,7 +436,7 @@ class Population(object):
         ------
         inp: np.array[values,features], the input array you will train on
         labels: list of values, the input array you have and want to reduce and predict
-        classifier: str, the classification algorithm to use (adaboost *, knn *****, svm *****, gaussian **** )
+        classifier: str, the classification algorithm to use (adaboost **, knn ***, svm ***, gaussian ***** )
         test: str, the test algorithm to use (reg,CV)
         scoring: string, the scoring to use (not all of them work for this type of classification)
         percentage: float, the percentage of your data that should be used for testing
@@ -478,7 +478,7 @@ class Population(object):
             print "cv scores : " + str(scores)
             score = np.mean(scores)
         elif test is 'reg':
-            X_train, X_test, y_train, y_test = self._get_training_data(inp, percentage=0.3)
+            X_train, X_test, y_train, y_test = self._get_training_data(inp, percentage=percentage)
             self.clf.fit(X_train, y_train)
             y_pred = self.clf.predict(X_test)
             score = accuracy_score(y_test, y_pred)
@@ -486,7 +486,7 @@ class Population(object):
         print "the total score is of " + str(score)
         return score
 
-    def predict_labels(self, inp=None):
+    def predict_labels(self, inp=None, minval=0.75):
         """
         give it an input (that you have been passed already to the PCA algorithm precising
         that it has already been trained) and gives you the labels
@@ -512,7 +512,7 @@ class Population(object):
                     a = 'U'
                     for key in self.types.keys():
                         if key is not 'nan':
-                            if self.found[x][y] > 0.75:
+                            if self.found[x][y] > minval:
                                 print "####",
                                 a = self.found[x][y]
 
@@ -627,10 +627,10 @@ class Population(object):
         if auto:
             sel = selector(k=k)
             self.train_red = sel.fit_transform(inp, out)
-            self.pred_red = self.pred_red[sel.get_support(True)]
+            self.pred_red = self.pred_red.T[:][sel.get_support(True)].T
         else:
-            self.train_red = self.train_red[featuresnumber]
-            self.pred_red = self.pred_red[featuresnumber]
+            self.train_red = self.train_red.T[:][featuresnumber].T
+            self.pred_red = self.pred_red.T[:][featuresnumber].T
 
     def plotPC(self, interactive=False, pc=[0, 1], foundplot=True, tsne=False):
         """
