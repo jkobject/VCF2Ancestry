@@ -1,4 +1,4 @@
- # source code for the program
+# source code for the program
 # Made by Jeremie KALFON in May 2018
 
 
@@ -22,7 +22,7 @@ from sklearn.metrics import accuracy_score
 from sklearn.svm import SVC
 from sklearn.gaussian_process import GaussianProcessClassifier as GCP
 from sklearn.manifold import TSNE
-
+from sklearn.feature_selection import SelectKBest as selector
 import time
 import os
 import json
@@ -42,7 +42,7 @@ except ImportError:
 
 
 class Population(object):
-    """Popultation object containing every function and 
+    """Popultation object containing every function and
     data structures  to run for the pipeline"""
 
     types = {'eas': 'east asian',
@@ -119,7 +119,7 @@ class Population(object):
     def load_dataset(self, filename=None, url=None):
         """
         load the data from dropbox in case the user don't have it already
-        you can load your own dataset from anywhere 
+        you can load your own dataset from anywhere
 
         Params:
         ------
@@ -290,7 +290,7 @@ class Population(object):
                 chrom = record.CHROM
                 if record.CHROM not in self.rec:
                     self.rec.update({chrom: {}})
-            self.rec[chrom].update({record.POS: [record.REF, record.ALT]})
+            self.rec[chrom].update({record.ID: [count, record.POS, record.REF, record.ALT]})
             train_gt = np.zeros(len(label_names))
             train_pha = np.zeros(len(label_names))
             for i, name in enumerate(label_names):
@@ -580,7 +580,59 @@ class Population(object):
         np.savetxt(filename2, np.vstack((self.train_red, self.pred_red)))
         print "it worked !"
 
-    def plotPC(self, interactive=False, foundplot=True):
+    # not working with the SNP IDs of Han et al.
+    def selectSNPs(self, names=[[11, 'rs232045'], [11, 'rs12786973'], [11, 'rs7946015'],
+                                [11, 'rs4756778'], [11, 'rs7931276'], [11, 'rs4823557'],
+                                [11, 'rs10832001'], [5, 'rs35397'], [11, 'rs11604470'],
+                                [11, 'rs10831841'], [1, 'rs2296224'], [11, 'rs12286898'],
+                                [11, 'rs1869084'], [11, 'rs4491181'], [11, 'rs1604797'],
+                                [11, 'rs7931276'], [11, 'rs11826168'], [11, 'rs477036'],
+                                [11, 'rs7940199'], [11, 'rs4429025'], [11, 'rs6483747'],
+                                [15, 'rs199138']]):
+        """
+        Will select a subset of snps from the list given (before dim reducing)
+
+        Params:
+        ------
+        names: list[int chromnb,str ID], list containing the chromosome number and the id
+        of the snps
+        """
+
+        newtraingt = np.zeros((self.train_gt.shape[0], len(names)))
+        newtestgt = np.zeros((self.test_gt.shape[0], len(names)))
+        newtestpha = np.zeros((self.test_pha.shape[0], len(names)))
+        newtrainpha = np.zeros((self.train_pha.shape[0], len(names)))
+        for i, name in enumerate(names):
+            val = self.rec[str(name[0])][name[1]][0]
+            # selecting the positional value of the SNP in the matrix from
+            # the chrom and ID of the snps
+            newtraingt.T[:][i] = self.train_gt.T[:][val]
+            newtestgt.T[:][i] = self.test_gt.T[:][val]
+            newtestpha.T[:][i] = self.test_pha.T[:][val]
+            newtrainpha.T[:][i] = self.train_pha.T[:][val]
+        self.train_gt = newtraingt
+        self.test_gt = newtestgt
+        self.test_pha = newtestpha
+        self.train_pha = newtrainpha
+
+    def selectfeatures(self, inp=None, out=None, auto=False, features=None, k=7):
+        """
+        will select a subset of features from the list or automatically according to
+        an ANOVA F-value
+        """
+        if not auto and type(featuresnumber) is not list:
+            raise NameError("need feature numbers as a list")
+        inp = inp if inp is not None else self.train_red
+        out = out if out is not None else self.labeled['ancestry']
+        if auto:
+            sel = selector(k=k)
+            self.train_red = sel.fit_transform(inp, out)
+            self.pred_red = self.pred_red[sel.get_support(True)]
+        else:
+            self.train_red = self.train_red[featuresnumber]
+            self.pred_red = self.pred_red[featuresnumber]
+
+    def plotPC(self, interactive=False, pc=[0, 1], foundplot=True, tsne=False):
         """
         will plot the features that have been extracted by the reducer algorithm
         it has nice features such as a color for each label and an interactive
@@ -590,6 +642,8 @@ class Population(object):
         -----
         Interactive: flag, if using bokeh or not to plot
         foundplot: flag, if add the predicted labels or not
+        pc: list of size 2, the two PCs to analyse
+        tsne: flag, use tsne or plot only two values
 
         Returns:
         -------
@@ -601,7 +655,7 @@ class Population(object):
                     'afr': '#34495e',
                     'amr': '#f1c40f',
                     'nan': '#000000',
-                    'fin': "#1abc9c",
+                    'fin': "#f39c12",
                     'U': '#7f8c8d'}
         if self.found is not None:
             found = self.found if self.classifier is not'svm' else [i[0] for i in self.found]
@@ -611,18 +665,24 @@ class Population(object):
         colorsnot = [colormap[str(x)] for x in found] if foundplot else None
         labels = list(self.labeled['ancestry'])
         labels.extend(found) if foundplot else None
-        reduced = TSNE(n_components=2, perplexity=30.0, verbose=1,
-                       learning_rate=200.0, n_iter=1000).fit_transform(
-            np.vstack((self.train_red, self.pred_red))if foundplot else self.train_red)
+        if tsne:
+            reduced = TSNE(n_components=2, perplexity=30.0, verbose=1,
+                           learning_rate=200.0, n_iter=1000).fit_transform(
+                np.vstack((self.train_red, self.pred_red))if foundplot else self.train_red)
+        else:
+            tot = np.vstack((self.train_red, self.pred_red))if foundplot else self.train_red
+            reduced = np.empty((tot.shape[0], 2))
+            reduced.T[:][0] = tot.T[:][pc[0]]
+            reduced.T[:][1] = tot.T[:][pc[1]]
         colorslab.extend(colorsnot) if foundplot else None
         if interactive:
-            # names = list(self.labeled['sample_id'])
-            # names.extend(list(self.tofind['sample_id']))
+            names = list(self.labeled['sample_id'])
+            names.extend(list(self.tofind['sample_id'])) if foundplot else None
             print " if you are on a notebook you should write 'from bokeh.io import output_notebook'"
-            source = ColumnDataSource(data=dict(x=reduced[:, 0], y=reduced[:, 1],
-                                                label=["origin : %s" % self.types[x] for x in labels], color=colorslab))
-            # to have the names try to replace with
-            # label=[names[i]+"origin :"+self.types[x] for i,x in enumerate(labels)]
+            source = ColumnDataSource(
+                data=dict(x=reduced[:, 0], y=reduced[:, 1],
+                          label=[names[i] + "origin :" + self.types[x] for i, x in enumerate(labels)],
+                          color=colorslab))
             output_notebook()
             hover = HoverTool(tooltips=[
                 ("label", "@label"),
@@ -662,7 +722,7 @@ def _inpar(chrom, label_names, test_names):
             print "done " + str(i) + " of chrom " + str(chrom)
         if record.CHROM != chrom:
             raise ValueError("the file has another type of chromosomes")
-        rec.update({record.POS: [record.REF, record.ALT]})
+        rec.update({record.ID: [i, record.POS, record.REF, record.ALT]})
         for name in label_names:
             train_gt.append(record.genotype(
                 name).gt_type if record.genotype(name).gt_type is not None else 0)
