@@ -509,23 +509,25 @@ class Population(object):
                     print '----------------------'
                     print str(i) + 'has:'
                     y = 0
-                    a = 'U'
+                    a = ''
+                    keya = 'U'
                     for key in self.types.keys():
                         if key is not 'nan':
                             if self.found[x][y] > minval:
                                 print "####",
                                 a = self.found[x][y]
+                                keya = key
 
                             print str(self.found[x][y]) + "% chance to be " + self.types[key]
                             y += 1
-                    founde.append([key, a])
+                    founde.append([keya, a])
                 self.found = founde
             else:
                 self.found = self.clf.predict(inp) if inp is not None else self.clf.predict(
                     self.pred_red)
             return self.found
 
-    def compute_features_nb(self, classifier='knn', reducer='pca', vmin=50, vmax=1000, step=10):
+    def compute_features_nb(self, classifier='knn', reducer='pca', vmin=50, vmax=1000, step=10, k=5):
         """
         computes the number of features that is the best with a simple gready search
         does not count as training
@@ -549,6 +551,7 @@ class Population(object):
         scores = np.zeros(len(vals))
         for i, val in enumerate(vals):
             self.reduce_features(n_components=val, reducer=reducer)
+            self.selectfeatures(auto=True, k=k)
             score = self.train_classifier(classifier=classifier, train=False)
             scores[i] = score
         plt.plot(vals, scores)
